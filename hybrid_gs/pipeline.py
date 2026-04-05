@@ -1,0 +1,169 @@
+from __future__ import annotations
+
+import argparse
+import random
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import torch
+from PIL import Image
+
+from hybrid_gs.camera import orbit_cameras
+from hybrid_gs.gaussians import AnchoredGaussianModel, GaussianState, procedural_colors, prompt_palette
+from hybrid_gs.losses import (
+    appearance_guidance_loss,
+    opacity_regularization,
+    reconstruction_loss,
+    scale_regularization,
+    tether_loss,
+)
+from hybrid_gs.mesh import Mesh, load_obj_mesh, primitive_mesh_from_prompt, sample_surface
+from hybrid_gs.renderer import render_gaussians
+
+
+@dataclass
+class HybridConfig:
+    prompt: str
+    mesh_path: str | None
+    out_dir: Path
+    num_splats: int
+    steps: int
+    num_views: int
+    image_size: int
+    lr: float
+    seed: int
+    device: torch.device
+    lambda_tether: float = 3.0
+    lambda_appearance: float = 0.15
+    lambda_scale: float = 0.02
+    lambda_opacity: float = 0.01
+
+
+def set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+
+def save_image(path: Path, image: torch.Tensor) -> None:
+    array = (image.detach().cpu().clamp(0.0, 1.0).numpy() * 255.0).astype(np.uint8)
+    Image.fromarray(array).save(path)
+
+
+def load_mesh(cfg: HybridConfig) -> Mesh:
+    if cfg.mesh_path:
+        return load_obj_mesh(cfg.mesh_path, cfg.device)
+    return primitive_mesh_from_prompt(cfg.prompt, cfg.device)
+
+
+def build_proxy_targets(mesh: Mesh, cameras, prompt: str, image_size: int) -> list[torch.Tensor]:
+    samples, normals = sample_surface(mesh, 4 * 512)
+    palette = prompt_palette(prompt, mesh.vertices.device)
+    colors = procedural_colors(samples, normals, palette)
+    teacher = GaussianState(
+        means=samples,
+        scales=torch.full_like(samples, 0.035),
+        colors=colors,
+        opacity=torch.full((samples.shape[0], 1), 0.35, device=samples.device),
+    )
+    return [render_gaussians(teacher, camera) for camera in cameras]
+
+
+def optimize(cfg: HybridConfig) -> None:
+    cfg.out_dir.mkdir(parents=True, exist_ok=True)
+    mesh = load_mesh(cfg)
+    anchors, normals = sample_surface(mesh, cfg.num_splats)
+    model = AnchoredGaussianModel(anchors=anchors, normals=normals, prompt=cfg.prompt).to(cfg.device)
+    cameras = orbit_cameras(
+        num_views=cfg.num_views,
+        radius=2.8,
+        elevation_degrees=20.0,
+        image_size=cfg.image_size,
+        fov_degrees=45.0,
+        device=cfg.device,
+    )
+    targets = build_proxy_targets(mesh, cameras, cfg.prompt, cfg.image_size)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+
+    print(f"Running baseline with {cfg.num_splats} anchored splats on {cfg.device}.")
+    print("Pipeline: mesh prior -> surface samples -> Gaussian init -> refinement -> multi-view render")
+
+    for step in range(1, cfg.steps + 1):
+        optimizer.zero_grad()
+        state = model.state()
+
+        reconstruction = torch.zeros((), device=cfg.device)
+        for camera, target in zip(cameras, targets):
+            rendered = render_gaussians(state, camera)
+            reconstruction = reconstruction + reconstruction_loss(rendered, target)
+        reconstruction = reconstruction / len(cameras)
+
+        tether = tether_loss(state.means, model.anchor_positions, model.anchor_normals)
+        appearance = appearance_guidance_loss(state.colors, model.palette)
+        scale_penalty = scale_regularization(state.scales)
+        opacity_penalty = opacity_regularization(state.opacity)
+
+        total = (
+            reconstruction
+            + cfg.lambda_tether * tether
+            + cfg.lambda_appearance * appearance
+            + cfg.lambda_scale * scale_penalty
+            + cfg.lambda_opacity * opacity_penalty
+        )
+        total.backward()
+        optimizer.step()
+
+        if step == 1 or step % max(cfg.steps // 10, 1) == 0 or step == cfg.steps:
+            print(
+                f"[{step:04d}/{cfg.steps}] "
+                f"total={total.item():.4f} "
+                f"recon={reconstruction.item():.4f} "
+                f"tether={tether.item():.4f} "
+                f"appearance={appearance.item():.4f}"
+            )
+
+    final_state = model.state()
+    for index, (camera, target) in enumerate(zip(cameras, targets)):
+        rendered = render_gaussians(final_state, camera)
+        save_image(cfg.out_dir / f"view_{index:02d}_render.png", rendered)
+        save_image(cfg.out_dir / f"view_{index:02d}_target.png", target)
+
+
+def parse_args() -> HybridConfig:
+    parser = argparse.ArgumentParser(description="Hybrid mesh + Gaussian splatting baseline.")
+    parser.add_argument("--prompt", default="stone statue", help="Semantic prompt used for mesh choice and appearance prior.")
+    parser.add_argument("--mesh", dest="mesh_path", default=None, help="Optional OBJ mesh path exported from Fantasia3D or another generator.")
+    parser.add_argument("--out-dir", default="outputs/demo", help="Directory for rendered outputs.")
+    parser.add_argument("--num-splats", type=int, default=384, help="Number of anchored Gaussian splats.")
+    parser.add_argument("--steps", type=int, default=200, help="Optimization steps.")
+    parser.add_argument("--num-views", type=int, default=6, help="Number of training/rendering views.")
+    parser.add_argument("--image-size", type=int, default=96, help="Square render resolution.")
+    parser.add_argument("--lr", type=float, default=0.05, help="Optimizer learning rate.")
+    parser.add_argument("--seed", type=int, default=7, help="Random seed.")
+    parser.add_argument("--cpu", action="store_true", help="Force CPU even if CUDA is available.")
+    args = parser.parse_args()
+
+    if args.cpu:
+        device = torch.device("cpu")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    return HybridConfig(
+        prompt=args.prompt,
+        mesh_path=args.mesh_path,
+        out_dir=Path(args.out_dir),
+        num_splats=args.num_splats,
+        steps=args.steps,
+        num_views=args.num_views,
+        image_size=args.image_size,
+        lr=args.lr,
+        seed=args.seed,
+        device=device,
+    )
+
+
+def main() -> None:
+    cfg = parse_args()
+    set_seed(cfg.seed)
+    optimize(cfg)
