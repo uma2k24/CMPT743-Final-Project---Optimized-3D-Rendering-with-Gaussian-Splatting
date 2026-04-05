@@ -1,10 +1,5 @@
 # Hybrid Mesh + Gaussian Splatting Baseline
 
-This repository is a runnable baseline for the hybrid pipeline described in:
-
-- `CMPT 743_ 3D Reconstruction.pdf`
-- `CMPT 743_ Optimized 3D Rendering with Gaussian Splatting.pdf`
-
 It is intentionally scoped as a project baseline rather than a full reproduction of Fantasia3D or the original 3D Gaussian Splatting paper.
 
 ## What it implements
