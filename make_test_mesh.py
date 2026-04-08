@@ -19,6 +19,7 @@ import trimesh
 def parse_args() -> argparse.Namespace:
     # Create the top-level CLI parser for the test mesh generator.
     parser = argparse.ArgumentParser(description="Generate a simple test mesh as an OBJ file.")
+    
     # Let the user choose between the two supported primitive mesh types.
     parser.add_argument(
         "--shape",
@@ -26,12 +27,14 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="Primitive shape to export.",
     )
+
     # Output OBJ file path.
     parser.add_argument(
         "--output",
         required=True,
         help="Output OBJ path.",
     )
+
     # Sphere-specific radius parameter.
     parser.add_argument(
         "--radius",
@@ -39,6 +42,7 @@ def parse_args() -> argparse.Namespace:
         default=1.0,
         help="Sphere radius.",
     )
+
     # Cube-specific edge length parameter.
     parser.add_argument(
         "--size",
@@ -70,6 +74,7 @@ def prompt_for_args() -> argparse.Namespace:
 
     default_size = "2.0"
     size_text = input(f"Cube edge length [{default_size}]: ").strip() or default_size
+
     return argparse.Namespace(shape=shape, output=output, radius=1.0, size=float(size_text))
 
 
@@ -77,6 +82,7 @@ def build_mesh(shape: str, radius: float, size: float) -> trimesh.Trimesh:
     # Build a sphere primitive when requested.
     if shape == "sphere":
         return trimesh.primitives.Sphere(radius=radius)
+    
     # Otherwise build a cube primitive using the same size along all three axes.
     return trimesh.primitives.Box(extents=(size, size, size))
 
@@ -84,14 +90,19 @@ def build_mesh(shape: str, radius: float, size: float) -> trimesh.Trimesh:
 def main() -> None:
     # Use CLI args when provided, otherwise fall back to an interactive prompt.
     args = parse_args() if len(sys.argv) > 1 else prompt_for_args()
+
     # Construct the requested primitive mesh.
     mesh = build_mesh(args.shape, args.radius, args.size)
+
     # Normalize the output path into a Path object.
     output_path = Path(args.output)
+
     # Create the parent directory if it does not exist yet.
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Export the mesh as an OBJ file to the requested location.
     mesh.export(output_path)
+
     # Print the saved path so the caller can confirm where the file went.
     print(f"Saved {args.shape} mesh to {output_path}")
 
