@@ -19,12 +19,10 @@ The code entry point for this is:
 
 ## Recommended environment split
 
-Keep these in separate environments:
+Keep in separate environments:
 
 1. `SAM + this repo`
 2. `TripoSR`
-
-That keeps package conflicts lower and makes debugging easier.
 
 ## 1. SAM + this repo
 
@@ -129,8 +127,8 @@ python .\sam_triposr_pipeline.py `
 Expected outputs:
 
 - `outputs/sam_triposr_test/sam/`
-- `outputs/sam_triposr_test/triposr/`
-- `outputs/sam_triposr_test/triposr/triposr_mesh.obj`
+- `outputs/sam_triposr_test/mesh_obj_folder_results/`
+- `outputs/sam_triposr_test/mesh_obj_folder_results/triposr_mesh.obj`
 - `outputs/sam_triposr_test/pipeline_manifest.json`
 
 ## Verify output after a run
@@ -164,5 +162,4 @@ The main files they need are:
 - `sam_stage.py`
 - `TRIPOSR_SETUP.md`
 - `scripts/validate_triposr_pipeline.py`
-
 

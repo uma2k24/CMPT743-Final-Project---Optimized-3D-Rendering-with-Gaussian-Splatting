@@ -78,7 +78,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--triposr-output-dir",
         default=None,
-        help="Optional output directory for TripoSR. Defaults to <out-dir>/triposr.",
+        help="Optional output directory for TripoSR. Defaults to <out-dir>/mesh_obj_folder_results.",
     )
     parser.add_argument(
         "--triposr-mc-resolution",
@@ -143,6 +143,13 @@ def run_triposr(
     no_remove_bg: bool,
     render: bool,
 ) -> tuple[Path, dict[str, object]]:
+    # Resolve all paths up front because the TripoSR subprocess runs with cwd set
+    # to the external TripoSR repo, not this repository.
+    image_path = image_path.resolve()
+    pipeline_output_mesh_path = pipeline_output_mesh_path.resolve()
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # TripoSR's official entry point is run.py, which takes one or more images and
     # writes mesh.<format> into numbered subdirectories below --output-dir.
     #
@@ -249,18 +256,18 @@ def main() -> None:
     # Read all pipeline configuration from the CLI.
     args = parse_args()
     # The root output directory contains every artifact produced by this wrapper.
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir).resolve()
     # SAM artifacts are kept separate so it is easy to inspect the segmentation stage.
     sam_dir = out_dir / "sam"
     # TripoSR intermediates are kept under their own directory tree.
-    triposr_dir = Path(args.triposr_output_dir) if args.triposr_output_dir else (out_dir / "triposr")
+    triposr_dir = Path(args.triposr_output_dir) if args.triposr_output_dir else (out_dir / "mesh_obj_folder_results")
     # Final Gaussian renders and targets are written here by the baseline optimizer.
     gs_dir = out_dir / "gaussians"
     # This is the repo-owned OBJ path handed from TripoSR into the GS stage.
-    mesh_path = out_dir / "triposr" / args.mesh_name
+    mesh_path = out_dir / "mesh_obj_folder_results" / args.mesh_name
 
     # TripoSR sees either the original image or the cleaned SAM crop.
-    triposr_input_path = Path(args.input_image)
+    triposr_input_path = Path(args.input_image).resolve()
 
     # The manifest is the handoff contract for your team: it records what image was
     # used, where the mesh came from, and what settings produced the output.
