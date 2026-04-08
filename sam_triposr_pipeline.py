@@ -281,6 +281,7 @@ def main() -> None:
     }
 
     if not args.skip_sam:
+        print("[1/3] Running SAM foreground extraction...")
         # Stage 1: isolate the foreground object so TripoSR sees an object-centric image.
         masks = generate_masks(
             image_path=args.input_image,
@@ -305,11 +306,14 @@ def main() -> None:
             "area": artifacts.area,
             "selection": args.sam_selection,
         }
+    else:
+        print("[1/3] Skipping SAM and using the original input image...")
 
     # Stage 2: run TripoSR and retrieve its OBJ mesh.
     #
     # This is the key difference from TripoSG: TripoSR can already write OBJ, so
     # we do not need a GLB-to-OBJ conversion step in this pipeline.
+    print("[2/3] Running TripoSR reconstruction...")
     exported_mesh, triposr_manifest = run_triposr(
         image_path=triposr_input_path,
         pipeline_output_mesh_path=mesh_path,
@@ -327,6 +331,7 @@ def main() -> None:
     manifest["triposr"] = triposr_manifest
 
     if not args.skip_gs:
+        print("[3/3] Running Gaussian splatting optimization...")
         # Stage 3: feed TripoSR's OBJ directly into the existing Gaussian baseline.
         #
         # The Gaussian stage is intentionally unchanged. That means your partners can
@@ -352,6 +357,8 @@ def main() -> None:
             "steps": args.steps,
             "device": str(gs_device),
         }
+    else:
+        print("[3/3] Skipping Gaussian splatting. Mesh handoff is ready.")
 
     # Save a compact manifest so experiments can be reproduced later.
     #
@@ -360,6 +367,7 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     with (out_dir / "pipeline_manifest.json").open("w", encoding="utf-8") as handle:
         json.dump(manifest, handle, indent=2)
+    print("Pipeline finished.")
 
 
 if __name__ == "__main__":
