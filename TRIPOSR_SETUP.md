@@ -19,12 +19,10 @@ The code entry point for this is:
 
 ## Recommended environment split
 
-Keep these in separate environments:
+Keep in separate environments:
 
 1. `SAM + this repo`
 2. `TripoSR`
-
-That keeps package conflicts lower and makes debugging easier.
 
 ## 1. SAM + this repo
 
