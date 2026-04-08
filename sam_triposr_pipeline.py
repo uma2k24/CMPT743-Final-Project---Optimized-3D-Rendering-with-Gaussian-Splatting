@@ -143,6 +143,12 @@ def run_triposr(
     no_remove_bg: bool,
     render: bool,
 ) -> tuple[Path, dict[str, object]]:
+    # Resolve all paths up front because the TripoSR subprocess runs with cwd set
+    # to the external TripoSR repo, not this repository.
+    image_path = image_path.resolve()
+    pipeline_output_mesh_path = pipeline_output_mesh_path.resolve()
+    output_dir = output_dir.resolve()
+
     # TripoSR's official entry point is run.py, which takes one or more images and
     # writes mesh.<format> into numbered subdirectories below --output-dir.
     #
@@ -249,7 +255,7 @@ def main() -> None:
     # Read all pipeline configuration from the CLI.
     args = parse_args()
     # The root output directory contains every artifact produced by this wrapper.
-    out_dir = Path(args.out_dir)
+    out_dir = Path(args.out_dir).resolve()
     # SAM artifacts are kept separate so it is easy to inspect the segmentation stage.
     sam_dir = out_dir / "sam"
     # TripoSR intermediates are kept under their own directory tree.
@@ -260,7 +266,7 @@ def main() -> None:
     mesh_path = out_dir / "triposr" / args.mesh_name
 
     # TripoSR sees either the original image or the cleaned SAM crop.
-    triposr_input_path = Path(args.input_image)
+    triposr_input_path = Path(args.input_image).resolve()
 
     # The manifest is the handoff contract for your team: it records what image was
     # used, where the mesh came from, and what settings produced the output.
