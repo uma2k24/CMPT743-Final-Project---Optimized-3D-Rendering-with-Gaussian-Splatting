@@ -149,6 +149,9 @@ def run_triposr(
     pipeline_output_mesh_path = pipeline_output_mesh_path.resolve()
     output_dir = output_dir.resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
+    # TripoSR writes single-image outputs into output_dir/0 by convention.
+    # Precreate that folder so trimesh export inside TripoSR does not fail.
+    (output_dir / "0").mkdir(parents=True, exist_ok=True)
 
     # TripoSR's official entry point is run.py, which takes one or more images and
     # writes mesh.<format> into numbered subdirectories below --output-dir.
