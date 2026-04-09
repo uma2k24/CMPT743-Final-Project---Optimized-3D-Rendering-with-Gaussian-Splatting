@@ -8,6 +8,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image
+from PIL.Image import Resampling
 
 from hybrid_gs.camera import orbit_cameras
 from hybrid_gs.gaussians import AnchoredGaussianModel, GaussianState, procedural_colors, prompt_palette
@@ -26,6 +27,8 @@ from hybrid_gs.renderer import render_gaussians
 class HybridConfig:
     prompt: str
     mesh_path: str | None
+    reference_image_path: str | None
+    reference_mask_path: str | None
     out_dir: Path
     num_splats: int
     steps: int
@@ -38,6 +41,7 @@ class HybridConfig:
     lambda_appearance: float = 0.15
     lambda_scale: float = 0.02
     lambda_opacity: float = 0.01
+    lambda_mask: float = 0.20
 
 
 def set_seed(seed: int) -> None:
@@ -70,6 +74,33 @@ def build_proxy_targets(mesh: Mesh, cameras, prompt: str, image_size: int) -> li
     return [render_gaussians(teacher, camera) for camera in cameras]
 
 
+def _load_resized_rgb(path: str | Path, image_size: int) -> torch.Tensor:
+    # Real image supervision is resized into the same square canvas used by the renderer.
+    image = Image.open(path).convert("RGB").resize((image_size, image_size), Resampling.BILINEAR)
+    array = np.asarray(image, dtype=np.float32) / 255.0
+    return torch.from_numpy(array)
+
+
+def _load_resized_mask(path: str | Path, image_size: int) -> torch.Tensor:
+    mask = Image.open(path).convert("L").resize((image_size, image_size), Resampling.BILINEAR)
+    array = np.asarray(mask, dtype=np.float32) / 255.0
+    return torch.from_numpy(array)
+
+
+def maybe_load_reference_supervision(cfg: HybridConfig) -> tuple[torch.Tensor, torch.Tensor] | None:
+    # Optional real-image supervision: use a single image plus a foreground mask
+    # to anchor appearance and silhouette for the front-most camera view.
+    if not cfg.reference_image_path:
+        return None
+
+    rgb = _load_resized_rgb(cfg.reference_image_path, cfg.image_size).to(cfg.device)
+    if cfg.reference_mask_path:
+        mask = _load_resized_mask(cfg.reference_mask_path, cfg.image_size).to(cfg.device)
+    else:
+        mask = torch.ones((cfg.image_size, cfg.image_size), device=cfg.device, dtype=torch.float32)
+    return rgb, mask
+
+
 def optimize(cfg: HybridConfig) -> None:
     cfg.out_dir.mkdir(parents=True, exist_ok=True)
     mesh = load_mesh(cfg)
@@ -84,6 +115,7 @@ def optimize(cfg: HybridConfig) -> None:
         device=cfg.device,
     )
     targets = build_proxy_targets(mesh, cameras, cfg.prompt, cfg.image_size)
+    reference_supervision = maybe_load_reference_supervision(cfg)
     optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
 
     print(f"Running baseline with {cfg.num_splats} anchored splats on {cfg.device}.")
@@ -94,10 +126,19 @@ def optimize(cfg: HybridConfig) -> None:
         state = model.state()
 
         reconstruction = torch.zeros((), device=cfg.device)
+        mask_loss = torch.zeros((), device=cfg.device)
         for camera, target in zip(cameras, targets):
             rendered = render_gaussians(state, camera)
             reconstruction = reconstruction + reconstruction_loss(rendered, target)
         reconstruction = reconstruction / len(cameras)
+
+        if reference_supervision is not None:
+            # Use the first orbit camera as the "observed" view and add both RGB and
+            # silhouette supervision from the actual source image.
+            reference_rgb, reference_mask = reference_supervision
+            reference_render, reference_alpha = render_gaussians(state, cameras[0], return_alpha=True)
+            reconstruction = reconstruction + reconstruction_loss(reference_render, reference_rgb)
+            mask_loss = torch.mean(torch.abs(reference_alpha - reference_mask))
 
         tether = tether_loss(state.means, model.anchor_positions, model.anchor_normals)
         appearance = appearance_guidance_loss(state.colors, model.palette)
@@ -110,6 +151,7 @@ def optimize(cfg: HybridConfig) -> None:
             + cfg.lambda_appearance * appearance
             + cfg.lambda_scale * scale_penalty
             + cfg.lambda_opacity * opacity_penalty
+            + cfg.lambda_mask * mask_loss
         )
         total.backward()
         optimizer.step()
@@ -120,7 +162,8 @@ def optimize(cfg: HybridConfig) -> None:
                 f"total={total.item():.4f} "
                 f"recon={reconstruction.item():.4f} "
                 f"tether={tether.item():.4f} "
-                f"appearance={appearance.item():.4f}"
+                f"appearance={appearance.item():.4f} "
+                f"mask={mask_loss.item():.4f}"
             )
 
     final_state = model.state()
@@ -134,6 +177,8 @@ def parse_args() -> HybridConfig:
     parser = argparse.ArgumentParser(description="Hybrid mesh + Gaussian splatting baseline.")
     parser.add_argument("--prompt", default="stone statue", help="Semantic prompt used for mesh choice and appearance prior.")
     parser.add_argument("--mesh", dest="mesh_path", default=None, help="Optional OBJ mesh path exported from Fantasia3D or another generator.")
+    parser.add_argument("--reference-image", dest="reference_image_path", default=None, help="Optional real RGB image used to supervise the front view.")
+    parser.add_argument("--reference-mask", dest="reference_mask_path", default=None, help="Optional mask aligned with --reference-image for silhouette supervision.")
     parser.add_argument("--out-dir", default="outputs/demo", help="Directory for rendered outputs.")
     parser.add_argument("--num-splats", type=int, default=384, help="Number of anchored Gaussian splats.")
     parser.add_argument("--steps", type=int, default=200, help="Optimization steps.")
@@ -141,6 +186,7 @@ def parse_args() -> HybridConfig:
     parser.add_argument("--image-size", type=int, default=96, help="Square render resolution.")
     parser.add_argument("--lr", type=float, default=0.05, help="Optimizer learning rate.")
     parser.add_argument("--seed", type=int, default=7, help="Random seed.")
+    parser.add_argument("--lambda-mask", type=float, default=0.20, help="Weight for optional mask supervision from a real image.")
     parser.add_argument("--cpu", action="store_true", help="Force CPU even if CUDA is available.")
     args = parser.parse_args()
 
@@ -152,6 +198,8 @@ def parse_args() -> HybridConfig:
     return HybridConfig(
         prompt=args.prompt,
         mesh_path=args.mesh_path,
+        reference_image_path=args.reference_image_path,
+        reference_mask_path=args.reference_mask_path,
         out_dir=Path(args.out_dir),
         num_splats=args.num_splats,
         steps=args.steps,
@@ -160,6 +208,7 @@ def parse_args() -> HybridConfig:
         lr=args.lr,
         seed=args.seed,
         device=device,
+        lambda_mask=args.lambda_mask,
     )
 
 

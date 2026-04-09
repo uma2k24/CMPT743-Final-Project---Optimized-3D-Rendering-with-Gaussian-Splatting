@@ -11,7 +11,8 @@ def render_gaussians(
     camera: Camera,
     background: tuple[float, float, float] = (1.0, 1.0, 1.0),
     near_plane: float = 0.05,
-) -> torch.Tensor:
+    return_alpha: bool = False,
+) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
     device = state.means.device
     image_size = camera.image_size
     xs = torch.arange(image_size, device=device, dtype=torch.float32)
@@ -20,12 +21,13 @@ def render_gaussians(
 
     image = torch.ones((image_size, image_size, 3), device=device, dtype=torch.float32)
     image = image * torch.tensor(background, device=device, dtype=torch.float32).view(1, 1, 3)
+    alpha_image = torch.zeros((image_size, image_size), device=device, dtype=torch.float32)
 
     camera_points = camera.world_to_camera(state.means)
     depth = camera_points[:, 2]
     valid = depth > near_plane
     if not torch.any(valid):
-        return image
+        return (image, alpha_image) if return_alpha else image
 
     points = camera_points[valid]
     colors = state.colors[valid]
@@ -51,5 +53,8 @@ def render_gaussians(
         alpha = opacity[index, 0] * torch.exp(-0.5 * dist2)
         alpha = alpha.clamp(0.0, 0.98).unsqueeze(-1)
         image = image * (1.0 - alpha) + colors[index].view(1, 1, 3) * alpha
+        alpha_image = alpha_image + (1.0 - alpha_image) * alpha[..., 0]
 
-    return image.clamp(0.0, 1.0)
+    image = image.clamp(0.0, 1.0)
+    alpha_image = alpha_image.clamp(0.0, 1.0)
+    return (image, alpha_image) if return_alpha else image
