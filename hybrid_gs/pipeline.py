@@ -55,6 +55,16 @@ def save_image(path: Path, image: torch.Tensor) -> None:
     Image.fromarray(array).save(path)
 
 
+def save_gaussian_state(path: Path, state: GaussianState) -> None:
+    np.savez(
+        path,
+        means=state.means.detach().cpu().numpy(),
+        scales=state.scales.detach().cpu().numpy(),
+        colors=state.colors.detach().cpu().numpy(),
+        opacity=state.opacity.detach().cpu().numpy(),
+    )
+
+
 def load_mesh(cfg: HybridConfig) -> Mesh:
     if cfg.mesh_path:
         return load_obj_mesh(cfg.mesh_path, cfg.device)
@@ -167,6 +177,7 @@ def optimize(cfg: HybridConfig) -> None:
             )
 
     final_state = model.state()
+    save_gaussian_state(cfg.out_dir / "gaussian_state.npz", final_state)
     for index, (camera, target) in enumerate(zip(cameras, targets)):
         rendered = render_gaussians(final_state, camera)
         save_image(cfg.out_dir / f"view_{index:02d}_render.png", rendered)

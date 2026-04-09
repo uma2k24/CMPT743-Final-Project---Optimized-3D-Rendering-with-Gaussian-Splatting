@@ -1,3 +1,4 @@
+import argparse
 import os
 import cv2
 import numpy as np
@@ -13,7 +14,13 @@ def render_splats(
     image_width: int = 800,
     image_height: int = 800,
     point_radius: int = 2,
-    output_path: str = "../outputs/splat_render.png"
+    azimuth_deg: float = 0.0,
+    elevation_deg: float = 0.0,
+    camera_distance: float = 3.0,
+    rotation_x_deg: float = 0.0,
+    rotation_y_deg: float = 0.0,
+    rotation_z_deg: float = 0.0,
+    output_path: str = "/outputs/splat_render.png"
 ):
     """
     Render projected 3D points as simple 2D splats.
@@ -21,7 +28,14 @@ def render_splats(
     image = np.zeros((image_height, image_width, 3), dtype=np.uint8)
 
     K = get_camera_intrinsics(image_width, image_height)
-    R, t = get_camera_extrinsics()
+    R, t = get_camera_extrinsics(
+        azimuth_deg=azimuth_deg,
+        elevation_deg=elevation_deg,
+        radius=camera_distance,
+        rotation_x_deg=rotation_x_deg,
+        rotation_y_deg=rotation_y_deg,
+        rotation_z_deg=rotation_z_deg,
+    )
 
     pixels, depths, valid_mask = project_points(points_3d, K, R, t)
 
@@ -50,18 +64,103 @@ def render_splats(
     print(f"Saved render to: {output_path}")
 
 
-if __name__ == "__main__":
-    mesh_path = "../data/meshes/test.obj"
-    mesh = load_mesh(mesh_path)
+def parse_args():
+    parser = argparse.ArgumentParser(description="Render sampled mesh points as 2D splats.")
+    parser.add_argument(
+        "--mesh-path",
+        default="outputs/horse_test_gs/mesh_obj_folder_results/triposr_mesh.obj",
+        help="Path to the mesh OBJ file.",
+    )
+    parser.add_argument(
+        "--num-points",
+        type=int,
+        default=10000,
+        help="Number of surface points to sample from the mesh.",
+    )
+    parser.add_argument(
+        "--width",
+        type=int,
+        default=800,
+        help="Output image width in pixels.",
+    )
+    parser.add_argument(
+        "--height",
+        type=int,
+        default=800,
+        help="Output image height in pixels.",
+    )
+    parser.add_argument(
+        "--point-radius",
+        type=int,
+        default=2,
+        help="Radius of each rendered splat in pixels.",
+    )
+    parser.add_argument(
+        "--azimuth",
+        type=float,
+        default=0.0,
+        help="Horizontal orbit angle in degrees. 0 keeps the original front view.",
+    )
+    parser.add_argument(
+        "--elevation",
+        type=float,
+        default=0.0,
+        help="Vertical orbit angle in degrees.",
+    )
+    parser.add_argument(
+        "--distance",
+        type=float,
+        default=3.0,
+        help="Distance from the camera to the origin.",
+    )
+    parser.add_argument(
+        "--rot-x",
+        type=float,
+        default=0.0,
+        help="Extra camera-local rotation around the X axis in degrees.",
+    )
+    parser.add_argument(
+        "--rot-y",
+        type=float,
+        default=0.0,
+        help="Extra camera-local rotation around the Y axis in degrees.",
+    )
+    parser.add_argument(
+        "--rot-z",
+        type=float,
+        default=0.0,
+        help="Extra camera-local rotation around the Z axis in degrees.",
+    )
+    parser.add_argument(
+        "--output-path",
+        default="outputs/splat_render.png",
+        help="Where to save the rendered image.",
+    )
+    return parser.parse_args()
 
-    points, face_indices = sample_surface_points(mesh, num_points=10000)
+
+def main():
+    args = parse_args()
+    mesh = load_mesh(args.mesh_path)
+
+    points, face_indices = sample_surface_points(mesh, num_points=args.num_points)
     colors = sample_point_colors(mesh, face_indices)
 
     render_splats(
         points_3d=points,
         colors=colors,
-        image_width=800,
-        image_height=800,
-        point_radius=2,
-        output_path="../outputs/splat_render.png"
+        image_width=args.width,
+        image_height=args.height,
+        point_radius=args.point_radius,
+        azimuth_deg=args.azimuth,
+        elevation_deg=args.elevation,
+        camera_distance=args.distance,
+        rotation_x_deg=args.rot_x,
+        rotation_y_deg=args.rot_y,
+        rotation_z_deg=args.rot_z,
+        output_path=args.output_path,
     )
+
+
+if __name__ == "__main__":
+    main()
