@@ -1,0 +1,23 @@
+{
+  "backend": "triposr",
+  "input_image": "C:\\Users\\amand\\Desktop\\CMPT 743\\CMPT743-Final-Project---Optimized-3D-Rendering-with-Gaussian-Splatting\\data\\teapot.png",
+  "prompt": "teapot",
+  "realistic_image": false,
+  "triposr": {
+    "input_image": "C:\\Users\\amand\\Desktop\\CMPT 743\\CMPT743-Final-Project---Optimized-3D-Rendering-with-Gaussian-Splatting\\data\\teapot.png",
+    "prepared_input_image": "C:\\Users\\amand\\Desktop\\CMPT 743\\CMPT743-Final-Project---Optimized-3D-Rendering-with-Gaussian-Splatting\\outputs\\teapot_test_realistic\\mesh_obj_folder_results\\prepared_input.png",
+    "output_dir": "C:\\Users\\amand\\Desktop\\CMPT 743\\CMPT743-Final-Project---Optimized-3D-Rendering-with-Gaussian-Splatting\\outputs\\teapot_test_realistic\\mesh_obj_folder_results",
+    "generated_mesh_path": "C:\\Users\\amand\\Desktop\\CMPT 743\\CMPT743-Final-Project---Optimized-3D-Rendering-with-Gaussian-Splatting\\outputs\\teapot_test_realistic\\mesh_obj_folder_results\\0\\mesh.obj",
+    "mesh_path": "C:\\Users\\amand\\Desktop\\CMPT 743\\CMPT743-Final-Project---Optimized-3D-Rendering-with-Gaussian-Splatting\\outputs\\teapot_test_realistic\\mesh_obj_folder_results\\triposr_mesh.obj",
+    "model": "stabilityai/TripoSR",
+    "device": "cuda:0",
+    "mc_resolution": 256,
+    "chunk_size": 8192,
+    "foreground_ratio": 0.85,
+    "no_remove_bg": false,
+    "render": false,
+    "pad_ratio": 0.15,
+    "cleanup_mesh": true,
+    "workdir": "C:\\Users\\amand\\Desktop\\CMPT 743\\TripoSR"
+  }
+}
