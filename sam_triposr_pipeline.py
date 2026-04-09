@@ -41,6 +41,12 @@ def parse_args() -> argparse.Namespace:
         default="outputs/sam_triposr",
         help="Directory for SAM, TripoSR, Gaussian outputs, and the manifest.",
     )
+    parser.add_argument(
+        "--realistic-image",
+        default=None,
+        choices=["y", "n"],
+        help="Whether the input is a realistic photo. If omitted, the script asks interactively.",
+    )
 
     parser.add_argument("--sam-checkpoint", required=True, help="Path to the SAM checkpoint.")
     parser.add_argument("--sam-model-type", default="vit_h", help="SAM model type.")
@@ -141,6 +147,48 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--cpu", action="store_true", help="Force CPU for Gaussian optimization.")
 
     return parser.parse_args()
+
+
+def ask_yes_no(prompt_text: str) -> bool:
+    # Small interactive helper for cases where the user wants guided defaults.
+    while True:
+        answer = input(f"{prompt_text} [y/n]: ").strip().lower()
+        if answer == "y":
+            return True
+        if answer == "n":
+            return False
+        print("Please answer with 'y' or 'n'.")
+
+
+def resolve_realistic_image(args: argparse.Namespace) -> bool:
+    # Use the CLI value when provided so scripted runs stay non-interactive.
+    if args.realistic_image == "y":
+        return True
+    if args.realistic_image == "n":
+        return False
+    return ask_yes_no("Is this a realistic image/photo")
+
+
+def apply_input_profile(args: argparse.Namespace) -> bool:
+    # A lightweight "menu" for safer defaults:
+    # realistic photo -> keep current behavior
+    # non-realistic image/icon -> prefer skipping SAM and adding padding
+    realistic_image = resolve_realistic_image(args)
+    if realistic_image:
+        print("Input profile: realistic photo")
+        return True
+
+    print("Input profile: non-realistic / icon / graphic")
+    if not args.skip_sam:
+        print("Adjusting pipeline: enabling --skip-sam for non-realistic input.")
+        args.skip_sam = True
+    if args.triposr_pad_ratio == 0.0:
+        print("Adjusting pipeline: setting --triposr-pad-ratio to 0.15.")
+        args.triposr_pad_ratio = 0.15
+    if not args.triposr_cleanup:
+        print("Adjusting pipeline: enabling --triposr-cleanup.")
+        args.triposr_cleanup = True
+    return False
 
 
 def run_triposr(
@@ -321,6 +369,7 @@ def cleanup_obj_mesh(input_mesh_path: Path, output_mesh_path: Path) -> None:
 def main() -> None:
     # Read all pipeline configuration from the CLI.
     args = parse_args()
+    realistic_image = apply_input_profile(args)
     # The root output directory contains every artifact produced by this wrapper.
     out_dir = Path(args.out_dir).resolve()
     # SAM artifacts are kept separate so it is easy to inspect the segmentation stage.
@@ -341,6 +390,7 @@ def main() -> None:
         "backend": "triposr",
         "input_image": str(Path(args.input_image).resolve()),
         "prompt": args.prompt,
+        "realistic_image": realistic_image,
     }
 
     if not args.skip_sam:
