@@ -11,8 +11,12 @@ import sys
 # Path keeps filesystem handling consistent across Windows and Linux.
 from pathlib import Path
 
+# PIL is used to pad the input image before passing it to TripoSR.
+from PIL import Image
 # torch is used here only to pick CPU vs CUDA for the Gaussian stage.
 import torch
+# trimesh is used for lightweight mesh cleanup after TripoSR export.
+import trimesh
 
 # Reuse the existing Gaussian optimization pipeline from this repo.
 from hybrid_gs.pipeline import HybridConfig, optimize, set_seed
@@ -109,6 +113,17 @@ def parse_args() -> argparse.Namespace:
         help="Ask TripoSR to render preview views alongside the exported mesh.",
     )
     parser.add_argument(
+        "--triposr-pad-ratio",
+        type=float,
+        default=0.0,
+        help="Optional fractional border padding added around the input image before TripoSR.",
+    )
+    parser.add_argument(
+        "--triposr-cleanup",
+        action="store_true",
+        help="Post-process the TripoSR mesh by keeping the largest connected component.",
+    )
+    parser.add_argument(
         "--mesh-name",
         default="triposr_mesh.obj",
         help="Final OBJ filename copied into this repo's pipeline output directory.",
@@ -142,6 +157,8 @@ def run_triposr(
     foreground_ratio: float,
     no_remove_bg: bool,
     render: bool,
+    pad_ratio: float,
+    cleanup_mesh: bool,
 ) -> tuple[Path, dict[str, object]]:
     # Resolve all paths up front because the TripoSR subprocess runs with cwd set
     # to the external TripoSR repo, not this repository.
@@ -152,6 +169,13 @@ def run_triposr(
     # TripoSR writes single-image outputs into output_dir/0 by convention.
     # Precreate that folder so trimesh export inside TripoSR does not fail.
     (output_dir / "0").mkdir(parents=True, exist_ok=True)
+
+    # Padding helps when the object sits too close to image boundaries, which can
+    # otherwise encourage TripoSR to reconstruct a flat rectangular backplane.
+    prepared_image_path = image_path
+    if pad_ratio > 0.0:
+        prepared_image_path = output_dir / "prepared_input.png"
+        pad_image(image_path, prepared_image_path, pad_ratio)
 
     # TripoSR's official entry point is run.py, which takes one or more images and
     # writes mesh.<format> into numbered subdirectories below --output-dir.
@@ -165,7 +189,7 @@ def run_triposr(
         # TripoSR's official CLI script.
         "run.py",
         # Input image path. For this pipeline we pass exactly one image.
-        str(image_path),
+        str(prepared_image_path),
         # Forward the requested TripoSR device string.
         "--device",
         device,
@@ -226,12 +250,16 @@ def run_triposr(
     # This matters for team handoff: partners integrating the GS side only need to
     # care about one stable path inside this repo's output directory.
     pipeline_output_mesh_path.parent.mkdir(parents=True, exist_ok=True)
-    pipeline_output_mesh_path.write_text(generated_mesh_path.read_text(encoding="utf-8"), encoding="utf-8")
+    if cleanup_mesh:
+        cleanup_obj_mesh(generated_mesh_path, pipeline_output_mesh_path)
+    else:
+        pipeline_output_mesh_path.write_text(generated_mesh_path.read_text(encoding="utf-8"), encoding="utf-8")
 
     return pipeline_output_mesh_path, {
         # Store the exact image TripoSR consumed. This may be the original input or
         # the SAM-cropped RGBA image depending on whether SAM was enabled.
         "input_image": str(image_path.resolve()),
+        "prepared_input_image": str(prepared_image_path.resolve()),
         # Record TripoSR's own output root so intermediate artifacts can be inspected.
         "output_dir": str(output_dir.resolve()),
         # Record the original OBJ path created by TripoSR itself.
@@ -250,9 +278,44 @@ def run_triposr(
         "no_remove_bg": no_remove_bg,
         # Track whether preview renders were requested.
         "render": render,
+        # Track preprocessing and cleanup settings that affect geometry quality.
+        "pad_ratio": pad_ratio,
+        "cleanup_mesh": cleanup_mesh,
         # Track the external repo path for reproducibility.
         "workdir": str(Path(workdir).resolve()),
     }
+
+
+def pad_image(input_path: Path, output_path: Path, pad_ratio: float) -> None:
+    # Add symmetric border padding around the image so the object occupies less of
+    # the frame. This reduces the chance that TripoSR interprets crop boundaries as
+    # a shallow backing surface.
+    image = Image.open(input_path).convert("RGBA")
+    width, height = image.size
+    pad_x = max(1, int(width * pad_ratio))
+    pad_y = max(1, int(height * pad_ratio))
+    padded = Image.new("RGBA", (width + 2 * pad_x, height + 2 * pad_y), (255, 255, 255, 0))
+    padded.paste(image, (pad_x, pad_y), image)
+    padded.save(output_path)
+
+
+def cleanup_obj_mesh(input_mesh_path: Path, output_mesh_path: Path) -> None:
+    # Keep only the largest connected component. This removes many floating artifacts
+    # and isolated junk pieces before handing the mesh to the Gaussian stage.
+    loaded = trimesh.load(input_mesh_path, force="mesh")
+    if isinstance(loaded, trimesh.Scene):
+        geometry = [geometry for geometry in loaded.geometry.values()]
+        if not geometry:
+            raise RuntimeError(f"Mesh file at {input_mesh_path} did not contain any geometry.")
+        loaded = trimesh.util.concatenate(geometry)
+
+    components = loaded.split(only_watertight=False)
+    if not components:
+        raise RuntimeError(f"Mesh file at {input_mesh_path} did not contain any connected components.")
+
+    # Faces are the simplest stable proxy for component significance here.
+    largest = max(components, key=lambda component: len(component.faces))
+    largest.export(output_mesh_path)
 
 
 def main() -> None:
@@ -263,7 +326,7 @@ def main() -> None:
     # SAM artifacts are kept separate so it is easy to inspect the segmentation stage.
     sam_dir = out_dir / "sam"
     # TripoSR intermediates are kept under their own directory tree.
-    triposr_dir = Path(args.triposr_output_dir) if args.triposr_output_dir else (out_dir / "mesh_obj_folder_results")
+    triposr_dir = (Path(args.triposr_output_dir) if args.triposr_output_dir else (out_dir / "mesh_obj_folder_results")).resolve()
     # Final Gaussian renders and targets are written here by the baseline optimizer.
     gs_dir = out_dir / "gaussians"
     # This is the repo-owned OBJ path handed from TripoSR into the GS stage.
@@ -327,6 +390,8 @@ def main() -> None:
         foreground_ratio=args.triposr_foreground_ratio,
         no_remove_bg=args.triposr_no_remove_bg,
         render=args.triposr_render,
+        pad_ratio=args.triposr_pad_ratio,
+        cleanup_mesh=args.triposr_cleanup,
     )
     manifest["triposr"] = triposr_manifest
 
@@ -340,6 +405,8 @@ def main() -> None:
         cfg = HybridConfig(
             prompt=args.prompt,
             mesh_path=str(exported_mesh),
+            reference_image_path=None,
+            reference_mask_path=None,
             out_dir=gs_dir,
             num_splats=args.num_splats,
             steps=args.steps,
